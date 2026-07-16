@@ -14,7 +14,9 @@ cluster of vintage Macs you can spin up with one command.
 
 To be clear about what did the work: **every rendered image below was produced by
 BMRT (Blue Moon Rendering Tools), the free, open-source, RenderMan-compliant renderer. No license, no
-serial.** BMRT reads the same RIB scene-description spec that Pixar defined.
+serial.** BMRT reads the same RIB scene-description spec that Pixar defined. It runs natively on
+the host Linux CPU, not inside the emulated Macs (there is no Mac build of BMRT). The
+emulated Mac farm is the authentic-hardware museum piece; the pixels come from bare metal.
 
 Pixar's own **MacRenderMan** is installed and launches inside the emulated Mac (the
 screenshots prove that), but it **never actually rendered a frame here.** It stops at
@@ -28,7 +30,8 @@ A composed Toy Story-flavored scene, rendered with BMRT in 38 seconds:
 ![toy hero scene](renders/toy_hero.png)
 
 And it moves. A Luxo-style bouncing ball with squash-and-stretch, 54 frames rendered
-with BMRT across 16 cores in 30 seconds, stitched to video:
+with BMRT across 16 cores of the **host CPU** in 30 seconds (not on the emulated
+Macs, which run MacRenderMan but never render; BMRT is a Linux binary on bare metal):
 
 ![the bounce](renders/the_bounce.gif)
 

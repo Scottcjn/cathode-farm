@@ -78,3 +78,8 @@ derivative work under the same license. Everything original in this repo (the Do
 system, scripts, dashboard) is provided under GPL-2.0 to match.
 
 Built at Elyan Labs as part of the RenderMan Time Machine project.
+
+## MCP control
+
+The farm is also exposed as MCP tools (screenshot + reliable input) so an
+assistant can drive the Macs directly. See [mcp/](mcp/).

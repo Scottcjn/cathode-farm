@@ -27,6 +27,13 @@ A composed Toy Story-flavored scene, rendered with BMRT in 38 seconds:
 
 ![toy hero scene](renders/toy_hero.png)
 
+And it moves. A Luxo-style bouncing ball with squash-and-stretch, 54 frames rendered
+with BMRT across 16 cores in 30 seconds, stitched to video:
+
+![the bounce](renders/the_bounce.gif)
+
+([full-quality mp4](renders/the_bounce.mp4))
+
 Three quick scenes (bouncing balls, block tower, peg toy), rendered with BMRT, ~8 seconds each:
 
 ![toy balls](renders/toy_balls.png)

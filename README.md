@@ -10,6 +10,36 @@ driven from the host over a control socket, so the whole thing is scriptable.
 This started as a question about how Toy Story was rendered and turned into a working
 cluster of vintage Macs you can spin up with one command.
 
+## Gallery
+
+A composed Toy Story-flavored scene, rendered on genuine RenderMan (BMRT) in 38 seconds:
+
+![toy hero scene](renders/toy_hero.png)
+
+The three quick scenes (bouncing balls, block tower, peg toy), ~8 seconds each:
+
+![toy balls](renders/toy_balls.png)
+![toy blocks](renders/toy_blocks.png)
+![toy figure](renders/toy_figure.png)
+
+Pixar's genuine MacRenderMan 1.3.4, installed and running inside an emulated Mac.
+RenderApp launches clean (no IAC error), driven entirely from the host over the ADB
+control socket:
+
+![MacRenderMan running](screenshots/macrenderman-running.png)
+
+It is gated by Pixar's own serial-number dialog, exactly as it shipped in 1994:
+
+![Pixar registration](screenshots/pixar-registration.png)
+
+The host-to-Mac bridge, with RIB files staged and MacRenderMan expanded on the emulated desktop:
+
+![Unix bridge](screenshots/unix-bridge-ribs.png)
+
+A farm node booted to System 7.5 inside its container:
+
+![System 7.5 node](screenshots/farm-node-alpha.png)
+
 ## What is in here
 
 - `patches/basilisk-adb-control-server.patch` - the one real code change. It adds a small

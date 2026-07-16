@@ -7,9 +7,10 @@
 > over AppleTalk the way a room of Quadras did in 1994.
 
 Cathode Farm turns the question "how was Toy Story rendered?" into a working cluster
-of vintage Macs you can spin up with one command. It runs Pixar's genuine MacRenderMan
-(serial-gated exactly as it shipped) and renders RenderMan scenes with BMRT, a free
-RenderMan-compliant renderer, on the same RIB spec 30 years later.
+of vintage Macs you can spin up with one command. Pixar's genuine MacRenderMan launches inside the emulated Mac but never renders a frame
+(it stops at Pixar's 1994 serial gate, which we did not have and did not crack). Every
+rendered image is produced by BMRT, a free open-source RenderMan-compliant renderer, on
+the same RIB spec 30 years later. MacRenderMan runs; BMRT renders.
 
 ## Core
 

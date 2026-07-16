@@ -10,25 +10,37 @@ driven from the host over a control socket, so the whole thing is scriptable.
 This started as a question about how Toy Story was rendered and turned into a working
 cluster of vintage Macs you can spin up with one command.
 
+## What rendered these images (read this first)
+
+To be clear about what did the work: **every rendered image below was produced by
+BMRT (Blue Moon Rendering Tools), the free, open-source, RenderMan-compliant renderer. No license, no
+serial.** BMRT reads the same RIB scene-description spec that Pixar defined.
+
+Pixar's own **MacRenderMan** is installed and launches inside the emulated Mac (the
+screenshots prove that), but it **never actually rendered a frame here.** It stops at
+Pixar's serial-number gate, which shipped with the 1994 software and which we did not
+have and did not crack. So: MacRenderMan *runs*, BMRT *renders*.
+
 ## Gallery
 
-A composed Toy Story-flavored scene, rendered on genuine RenderMan (BMRT) in 38 seconds:
+A composed Toy Story-flavored scene, rendered with BMRT in 38 seconds:
 
 ![toy hero scene](renders/toy_hero.png)
 
-The three quick scenes (bouncing balls, block tower, peg toy), ~8 seconds each:
+Three quick scenes (bouncing balls, block tower, peg toy), rendered with BMRT, ~8 seconds each:
 
 ![toy balls](renders/toy_balls.png)
 ![toy blocks](renders/toy_blocks.png)
 ![toy figure](renders/toy_figure.png)
 
-Pixar's genuine MacRenderMan 1.3.4, installed and running inside an emulated Mac.
-RenderApp launches clean (no IAC error), driven entirely from the host over the ADB
-control socket:
+Pixar's genuine MacRenderMan 1.3.4 installed and **launching** inside an emulated Mac,
+driven entirely from the host over the ADB control socket. It runs, but note it did not
+render any of the frames above:
 
 ![MacRenderMan running](screenshots/macrenderman-running.png)
 
-It is gated by Pixar's own serial-number dialog, exactly as it shipped in 1994:
+The reason it produced no frames: Pixar's serial-number gate, exactly as it shipped in
+1994. We entered nothing valid and did not bypass it:
 
 ![Pixar registration](screenshots/pixar-registration.png)
 

@@ -135,3 +135,11 @@ Built at Elyan Labs as part of the RenderMan Time Machine project.
 
 The farm is also exposed as MCP tools (screenshot + reliable input) so an
 assistant can drive the Macs directly. See [mcp/](mcp/).
+
+## TinyRIB - our own RenderMan renderer for the 1994 Mac
+
+Since MacRenderMan is serial-locked, the honest way to render RenderMan *on* the
+emulated Mac was to write the renderer ourselves and cross-compile it. See
+[tinyrib/](tinyrib/) - it reads RIB and ray-traces on the 68040, no license, no crack.
+
+![TinyRIB on a 1994 Mac](screenshots/tinyrib-on-1994-mac.png)

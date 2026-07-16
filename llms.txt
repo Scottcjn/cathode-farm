@@ -1,0 +1,38 @@
+# Cathode Farm
+
+> A 1994-style AppleTalk render farm built from emulated Macintoshes in Docker.
+> Each container runs one emulated Mac (System 7.5) on a patched Basilisk II with
+> an ADB-layer control server, so the classic Macs are scriptable like any service.
+> The nodes share one virtual EtherTalk segment (Basilisk udptunnel) to network
+> over AppleTalk the way a room of Quadras did in 1994.
+
+Cathode Farm turns the question "how was Toy Story rendered?" into a working cluster
+of vintage Macs you can spin up with one command. It runs Pixar's genuine MacRenderMan
+(serial-gated exactly as it shipped) and renders RenderMan scenes with BMRT, a free
+RenderMan-compliant renderer, on the same RIB spec 30 years later.
+
+## Core
+
+- [README](README.md): what it is, the control protocol, how to run the farm.
+- [Basilisk II ADB control-server patch](patches/basilisk-adb-control-server.patch): the
+  one code change. A TCP server that injects mouse/keyboard at the ADB layer with precise
+  timing, replacing unreliable host-side X11 injection.
+- [Dockerfile](docker/Dockerfile): multi-stage image that compiles the patched emulator
+  inside the container so it matches the runtime glibc.
+- [docker-compose.yml](docker/docker-compose.yml): a farm of named EtherTalk nodes.
+
+## Control
+
+- [macctl.sh](macctl.sh): drive a node from the host (click, double-click, type, key, screenshot).
+- [mcp/server.py](mcp/server.py): the farm as MCP tools (screenshot + reliable input) for assistants.
+
+## Renders
+
+- [renders/](renders/): original Toy Story-flavored RenderMan scenes rendered with BMRT
+  (toy_hero 960x720 ~38s, toy_balls/blocks/figure 640x480 ~8s each). Generators included.
+
+## Notes
+
+- Requires you to supply a Macintosh ROM, a System 7.5 disk image, and StuffIt Expander;
+  these are not shipped for licensing reasons. See the README.
+- License: GPL-2.0 (Basilisk II is GPL by Christian Bauer and contributors).

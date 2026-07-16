@@ -1,0 +1,61 @@
+# 1994 AppleTalk render farm — many emulated Macs, one virtual EtherTalk segment.
+# Scale by adding services; every node shares UDP_PORT so they see each other's EtherTalk.
+# Control each node's Mac from the host:  nc 127.0.0.1 <host-ctl-port>   (see ports below)
+name: mac-farm
+
+x-node: &node
+  build: .
+  image: mac-farm-node:latest
+  networks: [ ethertalk ]
+  environment:
+    UDP_PORT: "6066"          # SAME on all nodes => one AppleTalk network
+  # Basilisk needs a realtime 60Hz thread (SYS_NICE+rtprio) and raw ether (NET_ADMIN)
+  cap_add: [ SYS_NICE, NET_ADMIN ]
+  ulimits:
+    rtprio: 99
+    nproc: 8192
+  restart: unless-stopped
+  # /shared = render bridge (RIBs in, images out). /os/os.img = per-node writable OS.
+  volumes:
+    - ../shared:/shared
+
+services:
+  alpha:
+    <<: *node
+    container_name: mac-alpha
+    environment:
+      NODE_ID: "1"
+      NODE_NAME: "RenderNode-Alpha"
+      UDP_PORT: "6066"
+    ports: [ "6561:6560" ]     # host 6561 -> this Mac's control server
+    volumes:
+      - ../shared:/shared
+      - ./os/alpha.img:/os/os.img
+
+  bravo:
+    <<: *node
+    container_name: mac-bravo
+    environment:
+      NODE_ID: "2"
+      NODE_NAME: "RenderNode-Bravo"
+      UDP_PORT: "6066"
+    ports: [ "6562:6560" ]
+    volumes:
+      - ../shared:/shared
+      - ./os/bravo.img:/os/os.img
+
+  charlie:
+    <<: *node
+    container_name: mac-charlie
+    environment:
+      NODE_ID: "3"
+      NODE_NAME: "RenderNode-Charlie"
+      UDP_PORT: "6066"
+    ports: [ "6563:6560" ]
+    volumes:
+      - ../shared:/shared
+      - ./os/charlie.img:/os/os.img
+
+networks:
+  ethertalk:
+    driver: bridge          # user-defined bridge: passes broadcast between nodes (udptunnel)

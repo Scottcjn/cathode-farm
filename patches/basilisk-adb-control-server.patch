@@ -1,0 +1,127 @@
+diff --git a/BasiliskII/src/Unix/main_unix.cpp b/BasiliskII/src/Unix/main_unix.cpp
+index 08a700a..a9a708c 100755
+--- a/BasiliskII/src/Unix/main_unix.cpp
++++ b/BasiliskII/src/Unix/main_unix.cpp
+@@ -447,6 +447,106 @@ static void gui_activate (GtkApplication *app)
+ #endif
+ #endif
+ 
++// ==== Elyan Labs: reliable Mac input control server (RIP-farm) ====
++// Injects mouse/keyboard directly into the ADB layer with precise timing,
++// bypassing unreliable host-side X11 event injection. Line protocol over
++// TCP 127.0.0.1:$RC_MAC_CTL_PORT (default 6560):
++//   m X Y        absolute mouse move        d / u   left button down/up
++//   c X Y        click        dc X Y        double-click (Mac-timed)
++//   kd C / ku C  key down/up by Mac code    k C     key press
++//   cmd C        Command+key (e.g. Cmd+O)   t TEXT  type ascii string
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <unistd.h>
++extern void ADBMouseMoved(int x, int y);
++extern void ADBMouseDown(int button);
++extern void ADBMouseUp(int button);
++extern void ADBKeyDown(int code);
++extern void ADBKeyUp(int code);
++
++#define MAC_CMD 55
++#define MAC_SHIFT 56
++
++static int ascii_to_mackey(char c, bool *shift) {
++	*shift = false;
++	if (c >= 'A' && c <= 'Z') { *shift = true; c = c - 'A' + 'a'; }
++	static const char letters[] = "asdfghzxcvbqweryt";      // codes 0..16 (b=11 gap handled below)
++	// explicit map for correctness
++	switch (c) {
++		case 'a':return 0; case 's':return 1; case 'd':return 2; case 'f':return 3;
++		case 'h':return 4; case 'g':return 5; case 'z':return 6; case 'x':return 7;
++		case 'c':return 8; case 'v':return 9; case 'b':return 11; case 'q':return 12;
++		case 'w':return 13; case 'e':return 14; case 'r':return 15; case 'y':return 16;
++		case 't':return 17; case '1':return 18; case '2':return 19; case '3':return 20;
++		case '4':return 21; case '6':return 22; case '5':return 23; case '=':return 24;
++		case '9':return 25; case '7':return 26; case '-':return 27; case '8':return 28;
++		case '0':return 29; case ']':return 30; case 'o':return 31; case 'u':return 32;
++		case '[':return 33; case 'i':return 34; case 'p':return 35; case 'l':return 37;
++		case 'j':return 38; case '\'':return 39; case 'k':return 40; case ';':return 41;
++		case '\\':return 42; case ',':return 43; case '/':return 44; case 'n':return 45;
++		case 'm':return 46; case '.':return 47; case ' ':return 49;
++		default: return -1;
++	}
++	(void)letters;
++}
++static void ctl_click(int x, int y, int dbl) {
++	ADBMouseMoved(x, y); usleep(35000);
++	ADBMouseDown(0); usleep(45000); ADBMouseUp(0);
++	if (dbl) { usleep(70000); ADBMouseDown(0); usleep(45000); ADBMouseUp(0); }
++}
++static void ctl_key(int code) { ADBKeyDown(code); usleep(35000); ADBKeyUp(code); }
++static void ctl_cmdkey(int code) {
++	ADBKeyDown(MAC_CMD); usleep(25000); ADBKeyDown(code); usleep(45000);
++	ADBKeyUp(code); usleep(25000); ADBKeyUp(MAC_CMD);
++}
++static void *ctl_server(void *)
++{
++	int port = 6560;
++	const char *e = getenv("RC_MAC_CTL_PORT"); if (e) port = atoi(e);
++	int s = socket(AF_INET, SOCK_STREAM, 0);
++	if (s < 0) return NULL;
++	int opt = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
++	struct sockaddr_in a; memset(&a, 0, sizeof(a));
++	const char *bindenv = getenv("RC_MAC_CTL_BIND");   // "any" -> reachable from host (Docker)
++	a.sin_family = AF_INET;
++	a.sin_addr.s_addr = htonl((bindenv && strcmp(bindenv, "any") == 0) ? INADDR_ANY : INADDR_LOOPBACK);
++	a.sin_port = htons(port);
++	if (bind(s, (struct sockaddr *)&a, sizeof(a)) < 0) { close(s); return NULL; }
++	listen(s, 4);
++	printf("[macctl] input control server on 127.0.0.1:%d\n", port);
++	for (;;) {
++		int c = accept(s, NULL, NULL); if (c < 0) continue;
++		char buf[1024]; int n;
++		while ((n = read(c, buf, sizeof(buf) - 1)) > 0) {
++			buf[n] = 0;
++			char *save = NULL, *line = strtok_r(buf, "\n", &save);
++			while (line) {
++				int x, y, code;
++				if (sscanf(line, "m %d %d", &x, &y) == 2) ADBMouseMoved(x, y);
++				else if (strcmp(line, "d") == 0) ADBMouseDown(0);
++				else if (strcmp(line, "u") == 0) ADBMouseUp(0);
++				else if (sscanf(line, "dc %d %d", &x, &y) == 2) ctl_click(x, y, 1);
++				else if (sscanf(line, "c %d %d", &x, &y) == 2) ctl_click(x, y, 0);
++				else if (sscanf(line, "kd %d", &code) == 1) ADBKeyDown(code);
++				else if (sscanf(line, "ku %d", &code) == 1) ADBKeyUp(code);
++				else if (sscanf(line, "cmd %d", &code) == 1) ctl_cmdkey(code);
++				else if (sscanf(line, "k %d", &code) == 1) ctl_key(code);
++				else if (strncmp(line, "t ", 2) == 0) {
++					for (char *p = line + 2; *p; p++) {
++						bool sh; int mc = ascii_to_mackey(*p, &sh);
++						if (mc >= 0) { if (sh) ADBKeyDown(MAC_SHIFT); ctl_key(mc); if (sh) ADBKeyUp(MAC_SHIFT); }
++					}
++				}
++				write(c, "ok\n", 3);
++				line = strtok_r(NULL, "\n", &save);
++			}
++		}
++		close(c);
++	}
++	return NULL;
++}
++
+ int main(int argc, char **argv)
+ {
+ #ifdef ENABLE_GTK3
+@@ -821,6 +921,15 @@ int main(int argc, char **argv)
+ 		QuitEmulator();
+ 	D(bug("Initialization complete\n"));
+ 
++	// Elyan Labs: start the Mac input control server (reliable ADB-layer injection)
++#ifdef HAVE_PTHREADS
++	{
++		pthread_t ctl_th;
++		if (pthread_create(&ctl_th, NULL, ctl_server, NULL) == 0)
++			pthread_detach(ctl_th);
++	}
++#endif
++
+ 	D(bug("Mac RAM starts at %p (%08x)\n", RAMBaseHost, RAMBaseMac));
+ 	D(bug("Mac ROM starts at %p (%08x)\n", ROMBaseHost, ROMBaseMac));
+ 

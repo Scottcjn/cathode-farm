@@ -1,0 +1,10 @@
+# copyrighted / large assets — never commit
+docker/assets/
+docker/os/
+docker/macemu-src/
+docker/farm_shots/
+*.img
+*.rom
+*.sit
+prebuilt/
+shared/

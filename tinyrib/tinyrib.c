@@ -121,10 +121,15 @@ static int nexttok(void){
     if(c!=EOF)ungetc(c,rf); tok[i]=0; return 1;
 }
 static double nums[64];
-static int readnums(void){ /* read [ ... ] or single number, return count */
-    int n=0,tt=nexttok();
-    if(tt==3){ while((tt=nexttok())&&tt!=4){nums[n++]=atof(tok);} }
-    else nums[n++]=atof(tok);
+static int isnumtok(const char*s){ char c=s[0]; return c=='-'||c=='+'||c=='.'||(c>='0'&&c<='9'); }
+static int readnums(void){ /* read [ ... ], OR a run of bare numbers (Translate 0 -2.2 8); return count */
+    int n=0; long pos=ftell(rf); int tt=nexttok();
+    if(tt==3){ while((tt=nexttok())&&tt!=4)nums[n++]=atof(tok); return n; }
+    if(tt==1&&isnumtok(tok)){ nums[n++]=atof(tok);
+        for(;;){ pos=ftell(rf); tt=nexttok();
+            if(tt==1&&isnumtok(tok)) nums[n++]=atof(tok);
+            else { fseek(rf,pos,SEEK_SET); break; } }
+    } else fseek(rf,pos,SEEK_SET);
     return n;
 }
 
@@ -136,10 +141,10 @@ static void parseRIB(const char*path){
     while((tt=nexttok())){
         if(tt!=1)continue;
         if(!strcmp(tok,"Format")){nexttok();RESX=atoi(tok);nexttok();RESY=atoi(tok);nexttok();}
-        else if(!strcmp(tok,"Projection")){nexttok();/*"perspective"*/ int t2=nexttok();
-            if(t2==2){nexttok();/*"fov"*/ readnums();FOV=nums[0];} }
+        else if(!strcmp(tok,"Projection")){nexttok();/*"perspective"*/ int t2=nexttok();/*"fov"*/
+            if(t2==2&&!strcmp(tok,"fov")){readnums();FOV=nums[0];} }
         else if(!strcmp(tok,"Translate")){readnums();m_trans(inworld?cur:pre,nums[0],nums[1],nums[2]);}
-        else if(!strcmp(tok,"Rotate")){readnums();m_rot(inworld?cur:pre,nums[0],nums[1],nums[2],nums[3]);}
+        else if(!strcmp(tok,"Rotate")){readnums();/* RenderMan is left-handed: negate angle for our right-handed m_rot */ m_rot(inworld?cur:pre,-nums[0],nums[1],nums[2],nums[3]);}
         else if(!strcmp(tok,"WorldBegin")){inworld=1;
             /* camera-to-world = inverse of pre (pre is world->camera). Build simple inverse: pre is T*R composed; invmat via transpose-rot + neg-trans is complex; approximate: we treat pre as identity-usable by ray origin at 0 and applying pre inverse analytically is hard. Instead store pre and invmat numerically below. */
             memcpy(cam2world,pre,sizeof(pre));
@@ -207,13 +212,16 @@ int main(void){
     w=NewCWindow(0,&r,"\pTinyRIB - RenderMan on a 1994 Mac",1,0,(WindowPtr)-1,0,0);
     SetPort(w);
 
-    /* known-good look-at camera (RIB-matrix inverse was unreliable; use explicit) */
-    V3 eye=v(0,2.5,-8.5);
-    V3 aim=v(0,0.7,0);
+    /* camera straight from the RIB world-to-camera transform.
+       eye = pre^-1 * origin;  aim = pre^-1 * (0,0,1)  [RenderMan looks +Z] */
+    M4 c2w;invmat(cam2world,c2w);
+    V3 eye=m_pt(c2w,v(0,0,0));
+    V3 aim=m_pt(c2w,v(0,0,1));
     V3 fwd=norm(sub(aim,eye));
     V3 up=v(0,1,0);
-    V3 right=norm(v(fwd.y*up.z-fwd.z*up.y, fwd.z*up.x-fwd.x*up.z, fwd.x*up.y-fwd.y*up.x));
-    V3 tup=v(right.y*fwd.z-right.z*fwd.y, right.z*fwd.x-right.x*fwd.z, right.x*fwd.y-right.y*fwd.x);
+    /* RenderMan is left-handed: +x is screen-right looking down +z, so right = up x fwd */
+    V3 right=norm(v(up.y*fwd.z-up.z*fwd.y, up.z*fwd.x-up.x*fwd.z, up.x*fwd.y-up.y*fwd.x));
+    V3 tup=v(fwd.y*right.z-fwd.z*right.y, fwd.z*right.x-fwd.x*right.z, fwd.x*right.y-fwd.y*right.x);
     double aspect=(double)RESX/(double)RESY;
     double sc=tan(FOV*3.14159265/360.0);
     int px,py;

@@ -22,5 +22,7 @@ make          # produces TinyRIB.APPL and TinyRIB.dsk (an 800K mountable disk)
 Drop `toy.rib` on the disk next to the app, mount it in Basilisk II, and double-click
 TinyRIB. It renders `toy.rib` on the emulated 68040. GPL-2.0, (c) Elyan Labs.
 
-Known limitation: the camera is currently a fixed look-at; wiring the RIB pre-world
-transform (the world-to-camera matrix inverse) is the next step.
+The camera is read straight from the RIB: the pre-`WorldBegin` transform is inverted
+(Gauss-Jordan) to place the eye and look direction, and the field of view comes from
+`Projection "perspective" "fov"`. RenderMan's left-handed convention is handled (rotations
+negated into our right-handed matrices; +x maps to screen-right).

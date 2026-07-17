@@ -26,3 +26,35 @@ The camera is read straight from the RIB: the pre-`WorldBegin` transform is inve
 (Gauss-Jordan) to place the eye and look direction, and the field of view comes from
 `Projection "perspective" "fov"`. RenderMan's left-handed convention is handled (rotations
 negated into our right-handed matrices; +x maps to screen-right).
+
+## Animation + the render farm
+
+TinyRIB also renders sequences. If files named `frameNN.rib` are present on its
+volume it enters **batch mode**: it renders each to `frameNN.ppm` (a real image file
+written to disk), writes a `DONE` marker, and quits. Any subset works, so different
+farm nodes render different frames.
+
+`gen_robot_laser.py` emits an 18-frame "robot shooting a laser" animation (boxes +
+spheres + a `constant`/emissive laser beam). We split it across **three emulated Macs**
+running in parallel - each its own Basilisk II instance and OS image (`farm/farmA..C.prefs`,
+launched with `farm/launch_farm.sh`), rendering 6 frames each. After a clean shutdown
+flushes the disks, `farm/collect_and_assemble.sh` pulls the 18 PPMs off the HFS images
+with `hcopy` and assembles the GIF.
+
+![robot-laser frames rendered across the farm](../screenshots/robot-laser-farm-frames.png)
+
+The result ([renders/robot_laser.gif](../renders/robot_laser.gif)) was rendered entirely on
+the emulated 68040s - about 3 minutes per frame, authentically slow, the way 1994 was.
+
+### Host preview build
+
+The renderer is portable C; only pixel output and the window are Mac-specific. Compile
+the same source with `-DHOST_PREVIEW` to get a Linux binary that reads a RIB and writes a
+PPM, for fast iteration on scenes before rendering them for real on the Macs:
+
+```sh
+cc -DHOST_PREVIEW -O2 -o tinyrib_host tinyrib.c -lm
+./tinyrib_host frame00.rib frame00.ppm
+```
+
+Because it is the same source, the preview is pixel-faithful to what the Macs produce.

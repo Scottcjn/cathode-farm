@@ -3,10 +3,12 @@
  * shading and ray-traced shadows, draws to a Mac window as it goes.
  * Built with Retro68 (m68k-apple-macos-gcc).  (c) Elyan Labs, GPL-2.0.
  */
+#ifndef HOST_PREVIEW          /* HOST_PREVIEW: same renderer, compiled on Linux for fast iteration */
 #include <Quickdraw.h>
 #include <Windows.h>
 #include <Fonts.h>
 #include <Events.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +44,7 @@ static void m_rot(M4 m,double deg,double ax,double ay,double az){
 }
 
 /* ---- scene ---- */
-typedef struct { V3 col; double Ka,Kd,Ks,rough; } Mat;
+typedef struct { V3 col; double Ka,Kd,Ks,rough; int constant; } Mat; /* constant=unlit/emissive */
 typedef struct { int type; V3 a,b,c,d; double r; Mat m; } Prim; /* 0=sphere(a=center,r), 1=quad(a,b,c,d) */
 typedef struct { int type; V3 p; V3 col; double inten; } Light;  /* 0=ambient,1=distant(p=dir),2=point(p=pos) */
 
@@ -88,6 +90,7 @@ static int shadowed(V3 p,V3 ld,double dist){
 static V3 shade(V3 ro,V3 rd){
     double t;V3 nn;Mat m;
     if(!trace(ro,rd,&t,&nn,&m))return v(0.53,0.60,0.75); /* sky */
+    if(m.constant)return m.col;                          /* unlit/emissive (laser, muzzle flash) */
     V3 p=add(ro,scl(rd,t));V3 col=v(0,0,0);int i;
     for(i=0;i<nlight;i++){
         if(lights[i].type==0){ col=add(col,scl(m.col,m.Ka*lights[i].inten)); continue; }
@@ -102,11 +105,22 @@ static V3 shade(V3 ro,V3 rd){
     return col;
 }
 
-/* ---- draw one pixel to the Mac window ---- */
+/* ---- framebuffer + pixel output ---- */
+static unsigned char *fb=0;   /* RESX*RESY*3 RGB, for writing PPM frames to disk */
 static void putpix(int x,int y,V3 c){
-    RGBColor rc;int r=(int)(c.x*65535),g=(int)(c.y*65535),b=(int)(c.z*65535);
+    int r=(int)(c.x*65535),g=(int)(c.y*65535),b=(int)(c.z*65535);
     if(r<0)r=0;if(r>65535)r=65535;if(g<0)g=0;if(g>65535)g=65535;if(b<0)b=0;if(b>65535)b=65535;
-    rc.red=r;rc.green=g;rc.blue=b;SetCPixel(x,y,&rc);
+#ifndef HOST_PREVIEW
+    { RGBColor rc; rc.red=r;rc.green=g;rc.blue=b; SetCPixel(x,y,&rc); }
+#endif
+    if(fb){long i=((long)y*RESX+x)*3; fb[i]=r>>8; fb[i+1]=g>>8; fb[i+2]=b>>8;}
+}
+/* write the framebuffer as a binary PPM (P6) on the app's volume */
+static void write_ppm(const char*path){
+    FILE*f=fopen(path,"wb"); if(!f)return;
+    fprintf(f,"P6\n%d %d\n255\n",RESX,RESY);
+    fwrite(fb,1,(long)RESX*RESY*3,f);
+    fclose(f);
 }
 
 /* ---- very small RIB tokenizer ---- */
@@ -135,8 +149,9 @@ static int readnums(void){ /* read [ ... ], OR a run of bare numbers (Translate 
 
 static void parseRIB(const char*path){
     M4 stack[16];int sp=0;M4 cur;Mat curmat;
-    m_ident(cur);curmat.col=v(1,1,1);curmat.Ka=1;curmat.Kd=.6;curmat.Ks=0;curmat.rough=.1;
+    m_ident(cur);curmat.col=v(1,1,1);curmat.Ka=1;curmat.Kd=.6;curmat.Ks=0;curmat.rough=.1;curmat.constant=0;
     M4 pre;m_ident(pre);int inworld=0;
+    nprim=0;nlight=0;FOV=45;m_ident(cam2world); /* reset scene for a fresh frame */
     rf=fopen(path,"r");if(!rf)return;int tt;
     while((tt=nexttok())){
         if(tt!=1)continue;
@@ -157,6 +172,7 @@ static void parseRIB(const char*path){
             /* read optional param pairs "Ks" [..] etc until next command-ish */
             curmat.Ks=(!strcmp(nm,"plastic")||!strncmp(nm,"shiny",5)||!strcmp(nm,"metal"))?0.6:0.0;
             curmat.rough=0.08;
+            curmat.constant=!strcmp(nm,"constant");   /* unlit/emissive surface */
             /* peek params */
             long pos;int t2;
             for(;;){pos=ftell(rf);t2=nexttok();if(t2!=2){fseek(rf,pos,SEEK_SET);break;}
@@ -202,16 +218,8 @@ static void invmat(M4 a,M4 inv){
     }
 }
 
-int main(void){
-    WindowPtr w;Rect r;
-    InitGraf(&qd.thePort);InitFonts();InitWindows();InitMenus();InitCursor();
-
-    parseRIB("toy.rib");
-    if(RESX>440)RESX=440; if(RESY>320)RESY=320;
-    SetRect(&r,20,44,20+RESX,44+RESY);
-    w=NewCWindow(0,&r,"\pTinyRIB - RenderMan on a 1994 Mac",1,0,(WindowPtr)-1,0,0);
-    SetPort(w);
-
+/* render the currently-parsed scene into the window (and fb, if allocated) */
+static void render_scene(void){
     /* camera straight from the RIB world-to-camera transform.
        eye = pre^-1 * origin;  aim = pre^-1 * (0,0,1)  [RenderMan looks +Z] */
     M4 c2w;invmat(cam2world,c2w);
@@ -225,16 +233,59 @@ int main(void){
     double aspect=(double)RESX/(double)RESY;
     double sc=tan(FOV*3.14159265/360.0);
     int px,py;
-    for(py=0;py<RESY;py++){
-        for(px=0;px<RESX;px++){
-            double dx=(2.0*((px+0.5)/RESX)-1.0)*sc*aspect;
-            double dy=(1.0-2.0*((py+0.5)/RESY))*sc;
-            V3 rd=norm(add(fwd, add(scl(right,dx), scl(tup,dy))));
-            V3 col=shade(eye,rd);
-            putpix(px,py,col);
-        }
+    for(py=0;py<RESY;py++)for(px=0;px<RESX;px++){
+        double dx=(2.0*((px+0.5)/RESX)-1.0)*sc*aspect;
+        double dy=(1.0-2.0*((py+0.5)/RESY))*sc;
+        V3 rd=norm(add(fwd, add(scl(right,dx), scl(tup,dy))));
+        putpix(px,py,shade(eye,rd));
     }
-    /* wait for click/key */
+}
+
+#ifdef HOST_PREVIEW
+int main(int argc,char**argv){
+    if(argc<3){fprintf(stderr,"usage: %s in.rib out.ppm\n",argv[0]);return 1;}
+    parseRIB(argv[1]);
+    if(RESX>440)RESX=440; if(RESY>320)RESY=320;
+    fb=(unsigned char*)malloc((long)RESX*RESY*3);
+    render_scene();
+    if(fb)write_ppm(argv[2]);
+    return 0;
+}
+#else
+int main(void){
+    WindowPtr w;Rect r;int i;char rib[24],ppm[24];FILE*tf;
+    InitGraf(&qd.thePort);InitFonts();InitWindows();InitMenus();InitCursor();
+
+    /* Batch/farm mode: render whatever frameNN.rib files are staged on our volume
+       (any subset - each farm node gets a different slice) to frameNN.ppm, then quit. */
+    { int first=-1;
+      for(i=0;i<100;i++){sprintf(rib,"frame%02d.rib",i);tf=fopen(rib,"r");if(tf){fclose(tf);first=i;break;}}
+      if(first>=0){
+        sprintf(rib,"frame%02d.rib",first);parseRIB(rib);   /* size the window from the first frame we have */
+        if(RESX>440)RESX=440; if(RESY>320)RESY=320;
+        SetRect(&r,8,44,8+RESX,44+RESY);
+        w=NewCWindow(0,&r,"\pTinyRIB Farm",1,0,(WindowPtr)-1,0,0);SetPort(w);
+        for(i=0;i<100;i++){
+            sprintf(rib,"frame%02d.rib",i);sprintf(ppm,"frame%02d.ppm",i);
+            tf=fopen(rib,"r");if(!tf)continue;fclose(tf);    /* skip frames not assigned to this node */
+            parseRIB(rib);
+            if(RESX>440)RESX=440; if(RESY>320)RESY=320;
+            fb=(unsigned char*)malloc((long)RESX*RESY*3);
+            render_scene();
+            if(fb){write_ppm(ppm);free(fb);fb=0;}
+        }
+        tf=fopen("DONE","wb");if(tf){fputs("ok\n",tf);fclose(tf);}  /* host waits on this */
+        return 0;
+      }
+    }
+
+    /* Single interactive mode: render toy.rib and wait for a click. */
+    parseRIB("toy.rib");
+    if(RESX>440)RESX=440; if(RESY>320)RESY=320;
+    SetRect(&r,20,44,20+RESX,44+RESY);
+    w=NewCWindow(0,&r,"\pTinyRIB - RenderMan on a 1994 Mac",1,0,(WindowPtr)-1,0,0);SetPort(w);
+    render_scene();
     { EventRecord e; while(!WaitNextEvent(mDownMask|keyDownMask,&e,60,0)){} }
     return 0;
 }
+#endif

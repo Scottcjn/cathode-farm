@@ -143,3 +143,11 @@ emulated Mac was to write the renderer ourselves and cross-compile it. See
 [tinyrib/](tinyrib/) - it reads RIB and ray-traces on the 68040, no license, no crack.
 
 ![TinyRIB on a 1994 Mac](screenshots/tinyrib-on-1994-mac.png)
+
+### The robot-laser movie
+
+TinyRIB now renders animations, and the farm renders them in parallel - three emulated
+Macs, six frames each. A robot charges its cannon and fires a laser into a target that
+bursts, rendered entirely on the emulated 68040s (~3 min/frame). See [tinyrib/](tinyrib/).
+
+![robot laser](renders/robot_laser.gif)

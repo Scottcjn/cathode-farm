@@ -1,0 +1,16 @@
+disk /home/scott/mac-farm/prebuilt/Basilisk II/Mac OS 7.5
+disk /home/scott/mac-farm/farmA.dsk
+screen win/512/384
+rom /home/scott/mac-farm/prebuilt/Basilisk II/ROM/1994-07 - 06684214 - LC,Quadra,Performa 630.ROM
+bootdrive 0
+bootdriver 0
+ramsize 134217728
+frameskip 0
+modelid 14
+cpu 4
+fpu true
+nocdrom false
+nosound true
+nogui true
+ignoresegv true
+idlewait true

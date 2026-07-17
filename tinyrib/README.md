@@ -58,3 +58,20 @@ cc -DHOST_PREVIEW -O2 -o tinyrib_host tinyrib.c -lm
 ```
 
 Because it is the same source, the preview is pixel-faithful to what the Macs produce.
+
+## Toy Story-quality pass (2026-07-17)
+
+An upgraded render, cooked overnight on **six** emulated Macs. The renderer gained:
+- **Supersampled anti-aliasing** (`PixelSamples N` in the RIB -> NxN rays/pixel) - the main
+  "smooth like TS1" lever.
+- **Bounding-sphere culling + precomputed quad normals/edges** and **key-light-only shadows**,
+  so the heavier scene stays tractable on a 68040.
+- A `constant`/emissive surface for the glowing laser.
+
+`gen_robot_laser.py [frames] [w] [h] [samples]` emits the animation with a cinematic camera
+push-in, eased motion with cannon recoil, a detailed robot, a layered beam, and a shockwave
+impact. The final was **320x240, 2x2 AA, 30 frames**, split 5-per-node across six Basilisk II
+instances - about **48 minutes per frame** on the emulated 68040s. Every pixel ray-traced on
+1994 hardware; the host was only ever used for the `-DHOST_PREVIEW` design previews.
+
+![Toy Story-quality robot laser, rendered overnight on the farm](../screenshots/robot-laser-hq-frames.png)

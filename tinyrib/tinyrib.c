@@ -45,45 +45,53 @@ static void m_rot(M4 m,double deg,double ax,double ay,double az){
 
 /* ---- scene ---- */
 typedef struct { V3 col; double Ka,Kd,Ks,rough; int constant; } Mat; /* constant=unlit/emissive */
-typedef struct { int type; V3 a,b,c,d; double r; Mat m; } Prim; /* 0=sphere(a=center,r), 1=quad(a,b,c,d) */
+typedef struct { int type; V3 a,b,c,d; double r; Mat m; V3 bc; double br;
+                 V3 qn,qe1,qe2; double qil1,qil2; } Prim;
+/* 0=sphere,1=quad. bc/br=bounding sphere (culling); qn=quad normal,
+   qe1/qe2=normalized edges, qil1/qil2=1/edge-length (all precomputed once). */
 typedef struct { int type; V3 p; V3 col; double inten; } Light;  /* 0=ambient,1=distant(p=dir),2=point(p=pos) */
 
-#define MAXP 64
+#define MAXP 512
 #define MAXL 8
 static Prim prims[MAXP]; static int nprim=0;
 static Light lights[MAXL]; static int nlight=0;
 static int RESX=320,RESY=240; static double FOV=45;
+static int SS=1;      /* supersamples per axis (anti-aliasing); from RIB PixelSamples */
+static int keyLight=-1; /* only the brightest light casts shadows (fills don't) - faster + standard */
 static M4 cam2world;  /* inverse of the pre-world transform */
 
 /* ---- ray/prim intersection ---- */
 static int hit_sphere(V3 ro,V3 rd,V3 c,double r,double *t){
     V3 oc=sub(ro,c);double b=dot(oc,rd),cc=dot(oc,oc)-r*r,d=b*b-cc;
     if(d<0)return 0;double s=sqrt(d),t0=-b-s;if(t0<1e-4)t0=-b+s;if(t0<1e-4)return 0;*t=t0;return 1;}
-static int hit_quad(V3 ro,V3 rd,Prim*p,double *t,V3*n){
-    V3 e1=sub(p->b,p->a),e2=sub(p->d,p->a);V3 nn=norm(v(e1.y*e2.z-e1.z*e2.y,e1.z*e2.x-e1.x*e2.z,e1.x*e2.y-e1.y*e2.x));
-    double den=dot(nn,rd);if(fabs(den)<1e-6)return 0;double tt=dot(sub(p->a,ro),nn)/den;if(tt<1e-4)return 0;
+/* quick reject: does the ray's forward half-line miss this bounding sphere? */
+static int miss_bound(V3 ro,V3 rd,V3 c,double r){
+    V3 oc=sub(c,ro);double tca=dot(oc,rd);if(tca<-r)return 1;
+    double d2=dot(oc,oc)-tca*tca;return d2>r*r;}
+/* quad test using precomputed normal/edges (no per-ray cross/normalize) */
+static int hit_quad(V3 ro,V3 rd,Prim*p,double *t){
+    double den=dot(p->qn,rd);if(fabs(den)<1e-6)return 0;
+    double tt=dot(sub(p->a,ro),p->qn)/den;if(tt<1e-4)return 0;
     V3 h=add(ro,scl(rd,tt));V3 hp=sub(h,p->a);
-    double u=dot(hp,norm(e1))/len(e1),w=dot(hp,norm(e2))/len(e2);
-    if(u<0||u>1||w<0||w>1)return 0;*t=tt;*n=nn;return 1;}
+    double u=dot(hp,p->qe1)*p->qil1,w=dot(hp,p->qe2)*p->qil2;
+    if(u<0||u>1||w<0||w>1)return 0;*t=tt;return 1;}
 
 static int trace(V3 ro,V3 rd,double *t,V3 *n,Mat *m){
-    int i,best=-1;double bt=1e30,tt;V3 nn;
+    int i,best=-1;double bt=1e30,tt;
     for(i=0;i<nprim;i++){
         if(prims[i].type==0){ if(hit_sphere(ro,rd,prims[i].a,prims[i].r,&tt)&&tt<bt){bt=tt;best=i;} }
-        else { if(hit_quad(ro,rd,&prims[i],&tt,&nn)&&tt<bt){bt=tt;best=i;} }
+        else { if(!miss_bound(ro,rd,prims[i].bc,prims[i].br)&&hit_quad(ro,rd,&prims[i],&tt)&&tt<bt){bt=tt;best=i;} }
     }
     if(best<0)return 0;*t=bt;V3 h=add(ro,scl(rd,bt));
     if(prims[best].type==0)*n=norm(sub(h,prims[best].a));
-    else { V3 e1=sub(prims[best].b,prims[best].a),e2=sub(prims[best].d,prims[best].a);
-           *n=norm(v(e1.y*e2.z-e1.z*e2.y,e1.z*e2.x-e1.x*e2.z,e1.x*e2.y-e1.y*e2.x));
-           if(dot(*n,rd)>0)*n=scl(*n,-1); }
+    else { *n=prims[best].qn; if(dot(*n,rd)>0)*n=scl(*n,-1); }
     *m=prims[best].m;return 1;
 }
 static int shadowed(V3 p,V3 ld,double dist){
-    int i;double tt;V3 nn;
+    int i;double tt;
     for(i=0;i<nprim;i++){
         if(prims[i].type==0){ if(hit_sphere(p,ld,prims[i].a,prims[i].r,&tt)&&tt<dist)return 1; }
-        else { if(hit_quad(p,ld,&prims[i],&tt,&nn)&&tt<dist)return 1; }
+        else { if(!miss_bound(p,ld,prims[i].bc,prims[i].br)&&hit_quad(p,ld,&prims[i],&tt)&&tt<dist)return 1; }
     }
     return 0;
 }
@@ -97,7 +105,7 @@ static V3 shade(V3 ro,V3 rd){
         V3 ld;double dist;
         if(lights[i].type==1){ ld=norm(scl(lights[i].p,-1)); dist=1e30; }
         else { V3 d=sub(lights[i].p,p);dist=len(d);ld=norm(d); }
-        if(shadowed(add(p,scl(nn,1e-3)),ld,dist))continue;
+        if(i==keyLight&&shadowed(add(p,scl(nn,1e-3)),ld,dist))continue;
         double nl=dot(nn,ld);if(nl<0)nl=0;
         col=add(col,scl(v(m.col.x*lights[i].col.x,m.col.y*lights[i].col.y,m.col.z*lights[i].col.z),m.Kd*nl*lights[i].inten));
         if(m.Ks>0&&nl>0){ V3 h=norm(sub(ld,rd));double sp=dot(nn,h);if(sp>0){sp=pow(sp,1.0/(m.rough+.02)); col=add(col,scl(lights[i].col,m.Ks*sp*lights[i].inten));}}
@@ -151,11 +159,12 @@ static void parseRIB(const char*path){
     M4 stack[16];int sp=0;M4 cur;Mat curmat;
     m_ident(cur);curmat.col=v(1,1,1);curmat.Ka=1;curmat.Kd=.6;curmat.Ks=0;curmat.rough=.1;curmat.constant=0;
     M4 pre;m_ident(pre);int inworld=0;
-    nprim=0;nlight=0;FOV=45;m_ident(cam2world); /* reset scene for a fresh frame */
+    nprim=0;nlight=0;FOV=45;SS=1;m_ident(cam2world); /* reset scene for a fresh frame */
     rf=fopen(path,"r");if(!rf)return;int tt;
     while((tt=nexttok())){
         if(tt!=1)continue;
         if(!strcmp(tok,"Format")){nexttok();RESX=atoi(tok);nexttok();RESY=atoi(tok);nexttok();}
+        else if(!strcmp(tok,"PixelSamples")){readnums();SS=(int)nums[0];if(SS<1)SS=1;if(SS>4)SS=4;}
         else if(!strcmp(tok,"Projection")){nexttok();/*"perspective"*/ int t2=nexttok();/*"fov"*/
             if(t2==2&&!strcmp(tok,"fov")){readnums();FOV=nums[0];} }
         else if(!strcmp(tok,"Translate")){readnums();m_trans(inworld?cur:pre,nums[0],nums[1],nums[2]);}
@@ -198,13 +207,25 @@ static void parseRIB(const char*path){
             if(nlight<MAXL)lights[nlight++]=L;
         }
         else if(!strcmp(tok,"Sphere")){readnums();/*r zmin zmax tmax*/
-            if(nprim<MAXP){Prim p;p.type=0;p.r=nums[0];p.a=m_pt(cur,v(0,0,0));p.m=curmat;prims[nprim++]=p;} }
+            if(nprim<MAXP){Prim p;p.type=0;p.r=nums[0];p.a=m_pt(cur,v(0,0,0));p.m=curmat;
+                p.bc=p.a;p.br=p.r; prims[nprim++]=p;} }
         else if(!strcmp(tok,"Polygon")){nexttok();/*"P"*/ int n=readnums();
             if(nprim<MAXP&&n>=12){Prim p;p.type=1;p.a=m_pt(cur,v(nums[0],nums[1],nums[2]));
                 p.b=m_pt(cur,v(nums[3],nums[4],nums[5]));p.c=m_pt(cur,v(nums[6],nums[7],nums[8]));
-                p.d=m_pt(cur,v(nums[9],nums[10],nums[11]));p.m=curmat;prims[nprim++]=p;} }
+                p.d=m_pt(cur,v(nums[9],nums[10],nums[11]));p.m=curmat;
+                { V3 e1=sub(p.b,p.a),e2=sub(p.d,p.a); double l1=len(e1),l2=len(e2),d2,d3,d4;
+                  p.qe1=scl(e1,1.0/l1);p.qe2=scl(e2,1.0/l2);p.qil1=1.0/l1;p.qil2=1.0/l2;
+                  p.qn=norm(v(e1.y*e2.z-e1.z*e2.y,e1.z*e2.x-e1.x*e2.z,e1.x*e2.y-e1.y*e2.x));
+                  p.bc=scl(add(add(p.a,p.b),add(p.c,p.d)),0.25);
+                  p.br=len(sub(p.a,p.bc));
+                  d2=len(sub(p.b,p.bc));if(d2>p.br)p.br=d2;
+                  d3=len(sub(p.c,p.bc));if(d3>p.br)p.br=d3;
+                  d4=len(sub(p.d,p.bc));if(d4>p.br)p.br=d4; p.br+=1e-4; }
+                prims[nprim++]=p;} }
     }
     fclose(rf);
+    { int i; double best=-1; keyLight=-1;         /* brightest non-ambient light casts shadows */
+      for(i=0;i<nlight;i++) if(lights[i].type!=0 && lights[i].inten>best){best=lights[i].inten;keyLight=i;} }
 }
 
 /* invmat the world->camera (pre) transform to get camera position + basis.
@@ -232,12 +253,18 @@ static void render_scene(void){
     V3 tup=v(fwd.y*right.z-fwd.z*right.y, fwd.z*right.x-fwd.x*right.z, fwd.x*right.y-fwd.y*right.x);
     double aspect=(double)RESX/(double)RESY;
     double sc=tan(FOV*3.14159265/360.0);
-    int px,py;
+    double inv=1.0/(double)(SS*SS);
+    int px,py,sx,sy;
     for(py=0;py<RESY;py++)for(px=0;px<RESX;px++){
-        double dx=(2.0*((px+0.5)/RESX)-1.0)*sc*aspect;
-        double dy=(1.0-2.0*((py+0.5)/RESY))*sc;
-        V3 rd=norm(add(fwd, add(scl(right,dx), scl(tup,dy))));
-        putpix(px,py,shade(eye,rd));
+        V3 acc=v(0,0,0);
+        for(sy=0;sy<SS;sy++)for(sx=0;sx<SS;sx++){   /* SSxSS supersampled anti-aliasing */
+            double ox=(sx+0.5)/SS, oy=(sy+0.5)/SS;
+            double dx=(2.0*((px+ox)/RESX)-1.0)*sc*aspect;
+            double dy=(1.0-2.0*((py+oy)/RESY))*sc;
+            V3 rd=norm(add(fwd, add(scl(right,dx), scl(tup,dy))));
+            acc=add(acc,shade(eye,rd));
+        }
+        putpix(px,py,scl(acc,inv));
     }
 }
 

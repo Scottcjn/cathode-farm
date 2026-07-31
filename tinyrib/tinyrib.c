@@ -46,9 +46,12 @@ static void m_rot(M4 m,double deg,double ax,double ay,double az){
 /* ---- scene ---- */
 typedef struct { V3 col; double Ka,Kd,Ks,rough; int constant; } Mat; /* constant=unlit/emissive */
 typedef struct { int type; V3 a,b,c,d; double r; Mat m; V3 bc; double br;
-                 V3 qn,qe1,qe2; double qil1,qil2; } Prim;
-/* 0=sphere,1=quad. bc/br=bounding sphere (culling); qn=quad normal,
-   qe1/qe2=normalized edges, qil1/qil2=1/edge-length (all precomputed once). */
+                 V3 qn; short nv; short ax0,ax1; } Prim;
+/* 0=sphere,1=planar polygon (nv=3 triangle a,b,c / nv=4 quad a,b,c,d).
+   bc/br=bounding sphere (culling); qn=face normal; ax0/ax1=the two axes the face
+   projects onto without degenerating (dominant normal component dropped), so the
+   inside test is a plain 2D edge-sign test - exact for any shape, not just
+   axis-aligned rectangles, and it needs no per-ray divide. All precomputed once. */
 typedef struct { int type; V3 p; V3 col; double inten; } Light;  /* 0=ambient,1=distant(p=dir),2=point(p=pos) */
 
 #define MAXP 512
@@ -68,19 +71,37 @@ static int hit_sphere(V3 ro,V3 rd,V3 c,double r,double *t){
 static int miss_bound(V3 ro,V3 rd,V3 c,double r){
     V3 oc=sub(c,ro);double tca=dot(oc,rd);if(tca<-r)return 1;
     double d2=dot(oc,oc)-tca*tca;return d2>r*r;}
-/* quad test using precomputed normal/edges (no per-ray cross/normalize) */
-static int hit_quad(V3 ro,V3 rd,Prim*p,double *t){
+/* polygon test: ray/plane, then a 2D edge-sign test in the face's dominant plane.
+   Correct for triangles and for quads of any shape (the old normalized-edge test
+   only agreed with the truth when the two edges happened to be perpendicular). */
+static double comp(V3 p,int i){return i==0?p.x:(i==1?p.y:p.z);}
+static int in_tri2(double px,double py,double ax,double ay,
+                   double bx,double by,double cx,double cy){
+    double d1=(px-bx)*(ay-by)-(ax-bx)*(py-by);
+    double d2=(px-cx)*(by-cy)-(bx-cx)*(py-cy);
+    double d3=(px-ax)*(cy-ay)-(cx-ax)*(py-ay);
+    int neg=(d1<0)||(d2<0)||(d3<0), pos=(d1>0)||(d2>0)||(d3>0);
+    return !(neg&&pos);   /* all edge signs agree => inside (or on an edge) */
+}
+static int hit_poly(V3 ro,V3 rd,Prim*p,double *t){
     double den=dot(p->qn,rd);if(fabs(den)<1e-6)return 0;
     double tt=dot(sub(p->a,ro),p->qn)/den;if(tt<1e-4)return 0;
-    V3 h=add(ro,scl(rd,tt));V3 hp=sub(h,p->a);
-    double u=dot(hp,p->qe1)*p->qil1,w=dot(hp,p->qe2)*p->qil2;
-    if(u<0||u>1||w<0||w>1)return 0;*t=tt;return 1;}
+    { V3 h=add(ro,scl(rd,tt));
+      double hx=comp(h,p->ax0),hy=comp(h,p->ax1);
+      double ax=comp(p->a,p->ax0),ay=comp(p->a,p->ax1);
+      double bx=comp(p->b,p->ax0),by=comp(p->b,p->ax1);
+      double cx=comp(p->c,p->ax0),cy=comp(p->c,p->ax1);
+      if(in_tri2(hx,hy,ax,ay,bx,by,cx,cy)){*t=tt;return 1;}
+      if(p->nv==4){ double dx=comp(p->d,p->ax0),dy=comp(p->d,p->ax1);
+          if(in_tri2(hx,hy,ax,ay,cx,cy,dx,dy)){*t=tt;return 1;} }
+    }
+    return 0;}
 
 static int trace(V3 ro,V3 rd,double *t,V3 *n,Mat *m){
     int i,best=-1;double bt=1e30,tt;
     for(i=0;i<nprim;i++){
         if(prims[i].type==0){ if(hit_sphere(ro,rd,prims[i].a,prims[i].r,&tt)&&tt<bt){bt=tt;best=i;} }
-        else { if(!miss_bound(ro,rd,prims[i].bc,prims[i].br)&&hit_quad(ro,rd,&prims[i],&tt)&&tt<bt){bt=tt;best=i;} }
+        else { if(!miss_bound(ro,rd,prims[i].bc,prims[i].br)&&hit_poly(ro,rd,&prims[i],&tt)&&tt<bt){bt=tt;best=i;} }
     }
     if(best<0)return 0;*t=bt;V3 h=add(ro,scl(rd,bt));
     if(prims[best].type==0)*n=norm(sub(h,prims[best].a));
@@ -90,8 +111,13 @@ static int trace(V3 ro,V3 rd,double *t,V3 *n,Mat *m){
 static int shadowed(V3 p,V3 ld,double dist){
     int i;double tt;
     for(i=0;i<nprim;i++){
+        /* emissive props (laser beam, muzzle flash, eyes, sparks) are stand-ins for
+           light, not blockers: letting them occlude painted a hard black stripe
+           across the floor under the glowing beam.  Skipping them also drops ~20%
+           of the shadow-ray work in a firing frame. */
+        if(prims[i].m.constant)continue;
         if(prims[i].type==0){ if(hit_sphere(p,ld,prims[i].a,prims[i].r,&tt)&&tt<dist)return 1; }
-        else { if(!miss_bound(p,ld,prims[i].bc,prims[i].br)&&hit_quad(p,ld,&prims[i],&tt)&&tt<dist)return 1; }
+        else { if(!miss_bound(p,ld,prims[i].bc,prims[i].br)&&hit_poly(p,ld,&prims[i],&tt)&&tt<dist)return 1; }
     }
     return 0;
 }
@@ -135,28 +161,80 @@ static void write_ppm(const char*path){
 static FILE*rf; static char tok[256];
 static int nexttok(void){
     int c,i=0;
-    do{c=fgetc(rf);}while(c==' '||c=='\t'||c=='\n'||c=='\r');
+    for(;;){                       /* skip whitespace AND '#' comments to end of line */
+        do{c=fgetc(rf);}while(c==' '||c=='\t'||c=='\n'||c=='\r');
+        if(c!='#')break;
+        while((c=fgetc(rf))!=EOF&&c!='\n'&&c!='\r'){}
+        if(c==EOF)break;
+    }
     if(c==EOF)return 0;
     if(c=='"'){ while((c=fgetc(rf))!=EOF&&c!='"'&&i<255)tok[i++]=c; tok[i]=0; return 2; }
     if(c=='['||c==']'){ tok[0]=c;tok[1]=0;return c=='['?3:4; }
     do{ tok[i++]=c; c=fgetc(rf);}while(c!=EOF&&c!=' '&&c!='\t'&&c!='\n'&&c!='\r'&&c!='['&&c!=']'&&c!='"'&&i<255);
     if(c!=EOF)ungetc(c,rf); tok[i]=0; return 1;
 }
-static double nums[64];
+#define MAXNUM 256            /* a Polygon "P" of up to 85 vertices */
+static double nums[MAXNUM];
 static int isnumtok(const char*s){ char c=s[0]; return c=='-'||c=='+'||c=='.'||(c>='0'&&c<='9'); }
-static int readnums(void){ /* read [ ... ], OR a run of bare numbers (Translate 0 -2.2 8); return count */
+/* read [ ... ], OR a run of bare numbers (Translate 0 -2.2 8); return the count.
+   Values past MAXNUM are consumed but dropped: the array must never be written
+   past its end (there is no MMU on a 68K Mac to catch it) and the reader must
+   still stay in sync with the stream. */
+static int readnums(void){
     int n=0; long pos=ftell(rf); int tt=nexttok();
-    if(tt==3){ while((tt=nexttok())&&tt!=4)nums[n++]=atof(tok); return n; }
+    if(tt==3){ while((tt=nexttok())&&tt!=4){ if(n<MAXNUM)nums[n]=atof(tok); n++; }
+               return n>MAXNUM?MAXNUM:n; }
     if(tt==1&&isnumtok(tok)){ nums[n++]=atof(tok);
         for(;;){ pos=ftell(rf); tt=nexttok();
-            if(tt==1&&isnumtok(tok)) nums[n++]=atof(tok);
+            if(tt==1&&isnumtok(tok)){ if(n<MAXNUM)nums[n]=atof(tok); n++; }
             else { fseek(rf,pos,SEEK_SET); break; } }
     } else fseek(rf,pos,SEEK_SET);
-    return n;
+    return n>MAXNUM?MAXNUM:n;
+}
+/* bounded copy - RIB shader/light names are arbitrary length (real RIBs use paths),
+   the token buffer is 256 bytes and these landing pads were 64. */
+static void copytok(char*dst,int cap,const char*src){
+    int i=0; for(;i<cap-1&&src[i];i++)dst[i]=src[i]; dst[i]=0;
 }
 
+/* RIB defaults a shader starts from.  Naming a Surface resets every parameter it
+   does not mention - otherwise `Surface "matte"` after a `"Kd" [0.85]` surface keeps
+   that Kd and renders too bright. */
+static void surface_defaults(Mat*m,const char*nm){
+    m->Ka=1; m->Kd=0.6; m->rough=0.08;
+    m->Ks=(!strcmp(nm,"plastic")||!strncmp(nm,"shiny",5)||!strcmp(nm,"metal"))?0.6:0.0;
+    m->constant=!strcmp(nm,"constant");        /* unlit/emissive surface */
+}
+
+/* Append one planar face (nv=3 triangle a,b,c or nv=4 quad a,b,c,d): face normal,
+   the projection plane its inside-test uses, and a bounding sphere for culling.
+   Degenerate (zero-area) faces are dropped - they have no normal to shade with. */
+static void add_face(V3 a,V3 b,V3 c,V3 d,int nv,Mat m){
+    V3 e1,e2,nrm; double nx,ny,nz,dd;
+    if(nprim>=MAXP)return;
+    e1=sub(b,a); e2=sub(nv==4?d:c,a);
+    nrm=v(e1.y*e2.z-e1.z*e2.y, e1.z*e2.x-e1.x*e2.z, e1.x*e2.y-e1.y*e2.x);
+    if(len(nrm)<1e-12)return;
+    { Prim p; p.type=1; p.nv=(short)nv; p.a=a;p.b=b;p.c=c;p.d=(nv==4?d:c); p.m=m;
+      p.qn=norm(nrm);
+      nx=fabs(p.qn.x);ny=fabs(p.qn.y);nz=fabs(p.qn.z);
+      if(nx>=ny&&nx>=nz){p.ax0=1;p.ax1=2;}          /* drop the dominant normal axis */
+      else if(ny>=nz){p.ax0=0;p.ax1=2;}
+      else {p.ax0=0;p.ax1=1;}
+      p.bc=scl(add(add(p.a,p.b),add(p.c,p.d)),nv==4?0.25:(1.0/3.0));
+      if(nv==3)p.bc=scl(add(add(p.a,p.b),p.c),1.0/3.0);
+      p.br=len(sub(p.a,p.bc));
+      dd=len(sub(p.b,p.bc));if(dd>p.br)p.br=dd;
+      dd=len(sub(p.c,p.bc));if(dd>p.br)p.br=dd;
+      if(nv==4){dd=len(sub(p.d,p.bc));if(dd>p.br)p.br=dd;}
+      p.br+=1e-4;
+      prims[nprim++]=p; }
+}
+
+#define MAXSTACK 32
 static void parseRIB(const char*path){
-    M4 stack[16];int sp=0;M4 cur;Mat curmat;
+    struct { M4 x; Mat m; int attrs; } stack[MAXSTACK];
+    int sp=0,overflow=0;M4 cur;Mat curmat;
     m_ident(cur);curmat.col=v(1,1,1);curmat.Ka=1;curmat.Kd=.6;curmat.Ks=0;curmat.rough=.1;curmat.constant=0;
     M4 pre;m_ident(pre);int inworld=0;
     nprim=0;nlight=0;FOV=45;SS=1;m_ident(cam2world); /* reset scene for a fresh frame */
@@ -174,30 +252,38 @@ static void parseRIB(const char*path){
             memcpy(cam2world,pre,sizeof(pre));
         }
         else if(!strcmp(tok,"WorldEnd")){break;}
-        else if(!strcmp(tok,"AttributeBegin")||!strcmp(tok,"TransformBegin")){memcpy(stack[sp++],cur,sizeof(cur));}
-        else if(!strcmp(tok,"AttributeEnd")||!strcmp(tok,"TransformEnd")){if(sp>0)memcpy(cur,stack[--sp],sizeof(cur));}
+        /* AttributeBegin saves the WHOLE graphics state (RI spec) - transform AND the
+           shading attributes; TransformBegin saves only the transform.  Pushing just
+           the transform let Color/Surface leak out of a block and colour whatever came
+           next.  Depth past MAXSTACK is counted, not written (stack[16] had no bound
+           check at all), so nesting stays balanced instead of scribbling over locals. */
+        else if(!strcmp(tok,"AttributeBegin")||!strcmp(tok,"TransformBegin")){
+            int isattr=(tok[0]=='A');
+            if(sp<MAXSTACK){memcpy(stack[sp].x,cur,sizeof(cur));stack[sp].m=curmat;stack[sp].attrs=isattr;sp++;}
+            else overflow++; }
+        else if(!strcmp(tok,"AttributeEnd")||!strcmp(tok,"TransformEnd")){
+            if(overflow>0)overflow--;
+            else if(sp>0){sp--;memcpy(cur,stack[sp].x,sizeof(cur));if(stack[sp].attrs)curmat=stack[sp].m;} }
         else if(!strcmp(tok,"Color")){readnums();curmat.col=v(nums[0],nums[1],nums[2]);}
-        else if(!strcmp(tok,"Surface")){nexttok();/*name*/ char nm[64];strcpy(nm,tok);
-            /* read optional param pairs "Ks" [..] etc until next command-ish */
-            curmat.Ks=(!strcmp(nm,"plastic")||!strncmp(nm,"shiny",5)||!strcmp(nm,"metal"))?0.6:0.0;
-            curmat.rough=0.08;
-            curmat.constant=!strcmp(nm,"constant");   /* unlit/emissive surface */
+        else if(!strcmp(tok,"Surface")){nexttok();/*name*/ char nm[64];copytok(nm,sizeof(nm),tok);
+            /* a named shader starts from its defaults, then the params it declares */
+            surface_defaults(&curmat,nm);
             /* peek params */
             long pos;int t2;
             for(;;){pos=ftell(rf);t2=nexttok();if(t2!=2){fseek(rf,pos,SEEK_SET);break;}
-                char key[64];strcpy(key,tok);readnums();
+                char key[64];copytok(key,sizeof(key),tok);readnums();
                 if(!strcmp(key,"Ks"))curmat.Ks=nums[0];
                 else if(!strcmp(key,"Kd"))curmat.Kd=nums[0];
                 else if(!strcmp(key,"Ka"))curmat.Ka=nums[0];
                 else if(!strcmp(key,"roughness"))curmat.rough=nums[0];
             }
         }
-        else if(!strcmp(tok,"LightSource")){nexttok();char nm[64];strcpy(nm,tok);nexttok();/*seq*/
+        else if(!strcmp(tok,"LightSource")){nexttok();char nm[64];copytok(nm,sizeof(nm),tok);nexttok();/*seq*/
             Light L;L.type=0;L.col=v(1,1,1);L.inten=1;L.p=v(0,0,0);
             if(!strcmp(nm,"distantlight"))L.type=1; else if(!strcmp(nm,"pointlight"))L.type=2; else L.type=0;
             long pos;int t2;V3 from=v(0,0,0),to=v(0,0,0);
             for(;;){pos=ftell(rf);t2=nexttok();if(t2!=2){fseek(rf,pos,SEEK_SET);break;}
-                char key[64];strcpy(key,tok);readnums();
+                char key[64];copytok(key,sizeof(key),tok);readnums();
                 if(!strcmp(key,"intensity"))L.inten=nums[0];
                 else if(!strcmp(key,"lightcolor"))L.col=v(nums[0],nums[1],nums[2]);
                 else if(!strcmp(key,"from"))from=v(nums[0],nums[1],nums[2]);
@@ -209,19 +295,27 @@ static void parseRIB(const char*path){
         else if(!strcmp(tok,"Sphere")){readnums();/*r zmin zmax tmax*/
             if(nprim<MAXP){Prim p;p.type=0;p.r=nums[0];p.a=m_pt(cur,v(0,0,0));p.m=curmat;
                 p.bc=p.a;p.br=p.r; prims[nprim++]=p;} }
-        else if(!strcmp(tok,"Polygon")){nexttok();/*"P"*/ int n=readnums();
-            if(nprim<MAXP&&n>=12){Prim p;p.type=1;p.a=m_pt(cur,v(nums[0],nums[1],nums[2]));
-                p.b=m_pt(cur,v(nums[3],nums[4],nums[5]));p.c=m_pt(cur,v(nums[6],nums[7],nums[8]));
-                p.d=m_pt(cur,v(nums[9],nums[10],nums[11]));p.m=curmat;
-                { V3 e1=sub(p.b,p.a),e2=sub(p.d,p.a); double l1=len(e1),l2=len(e2),d2,d3,d4;
-                  p.qe1=scl(e1,1.0/l1);p.qe2=scl(e2,1.0/l2);p.qil1=1.0/l1;p.qil2=1.0/l2;
-                  p.qn=norm(v(e1.y*e2.z-e1.z*e2.y,e1.z*e2.x-e1.x*e2.z,e1.x*e2.y-e1.y*e2.x));
-                  p.bc=scl(add(add(p.a,p.b),add(p.c,p.d)),0.25);
-                  p.br=len(sub(p.a,p.bc));
-                  d2=len(sub(p.b,p.bc));if(d2>p.br)p.br=d2;
-                  d3=len(sub(p.c,p.bc));if(d3>p.br)p.br=d3;
-                  d4=len(sub(p.d,p.bc));if(d4>p.br)p.br=d4; p.br+=1e-4; }
-                prims[nprim++]=p;} }
+        /* Polygon: any vertex count, and the positions may not be the first parameter.
+           This used to read whatever parameter came first as "P", require at least 4
+           vertices (so every triangle - the commonest RIB primitive - vanished with no
+           diagnostic) and silently drop vertices 5..n. */
+        else if(!strcmp(tok,"Polygon")){
+            int n=0; long pos;int t2;
+            for(;;){ pos=ftell(rf); t2=nexttok(); if(t2!=2){fseek(rf,pos,SEEK_SET);break;}
+                { char key[64];int cnt;copytok(key,sizeof(key),tok);cnt=readnums();
+                  if(!strcmp(key,"P")){n=cnt;break;} } }       /* skip Cs/N/st/... */
+            if(n>=9){ int nv=n/3,k;                            /* fan from vertex 0 */
+                V3 v0=m_pt(cur,v(nums[0],nums[1],nums[2]));
+                for(k=1;k+1<nv;k++){
+                    V3 v1=m_pt(cur,v(nums[k*3],nums[k*3+1],nums[k*3+2]));
+                    V3 v2=m_pt(cur,v(nums[k*3+3],nums[k*3+4],nums[k*3+5]));
+                    if(nv==4&&k==1){                            /* keep quads as one prim */
+                        V3 v3=m_pt(cur,v(nums[9],nums[10],nums[11]));
+                        add_face(v0,v1,v2,v3,4,curmat); break; }
+                    add_face(v0,v1,v2,v2,3,curmat);
+                }
+            }
+        }
     }
     fclose(rf);
     { int i; double best=-1; keyLight=-1;         /* brightest non-ambient light casts shadows */

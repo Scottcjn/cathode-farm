@@ -6,7 +6,8 @@ laser, and a shockwave impact. Emits frameNN.rib using only what TinyRIB support
 spheres, polygon boxes, matte/plastic/constant surfaces, distant lights, a RIB camera.
 Usage: gen_robot_laser.py [NFRAMES] [WIDTH] [HEIGHT] [SAMPLES]   (c) Elyan Labs, GPL-2.0."""
 import os, sys, math
-OUT  = os.path.expanduser("~/mac-farm/tinyrib")
+OUT  = os.environ.get("TINYRIB_OUT") or os.path.expanduser("~/mac-farm/tinyrib")
+os.makedirs(OUT, exist_ok=True)
 NF   = int(sys.argv[1]) if len(sys.argv) > 1 else 24
 W    = int(sys.argv[2]) if len(sys.argv) > 2 else 256
 H    = int(sys.argv[3]) if len(sys.argv) > 3 else 192
@@ -39,15 +40,15 @@ def robot(recoil, look):
     s += box(rx-0.42,0.13,0.18, 0.30,0.12,0.42, TRIM)            # foot L
     s += box(rx+0.42,0.13,0.18, 0.30,0.12,0.42, TRIM)            # foot R
     s += box(rx,1.75,0.0, 0.85,0.78,0.55, STEEL)                 # torso
-    s += box(rx,1.75,0.57, 0.55,0.5,0.04, TRIM)                  # chest plate
-    s += ball(rx,1.82,0.63, 0.15, [0.15,0.95,1.0], surf="constant")   # chest core (glow)
+    s += box(rx,1.75,-0.57, 0.55,0.5,0.04, TRIM)                 # chest plate (-z = camera side)
+    s += ball(rx,1.82,-0.63, 0.15, [0.15,0.95,1.0], surf="constant")  # chest core (glow)
     s += box(rx-0.9,1.75,0.0, 0.12,0.55,0.4, STEELD)             # shoulder L
     s += box(rx+0.9,1.9,0.0,  0.12,0.28,0.4, STEELD)             # shoulder R (cannon)
     # head + visor
     s += box(rx,2.82,0.0, 0.52,0.44,0.5, STEEL)
-    s += box(rx+look*0.05,2.86,0.5, 0.42,0.16,0.03, TRIM)        # visor slot
-    s += ball(rx-0.22+look*0.05,2.9,0.5, 0.10,[0.2,1.0,1.0], surf="constant")  # eye L
-    s += ball(rx+0.22+look*0.05,2.9,0.5, 0.10,[0.2,1.0,1.0], surf="constant")  # eye R
+    s += box(rx+look*0.05,2.86,-0.53, 0.42,0.16,0.03, TRIM)      # visor slot
+    s += ball(rx-0.22+look*0.05,2.9,-0.58, 0.10,[0.2,1.0,1.0], surf="constant") # eye L
+    s += ball(rx+0.22+look*0.05,2.9,-0.58, 0.10,[0.2,1.0,1.0], surf="constant") # eye R
     s += box(rx,3.42,0.0, 0.05,0.2,0.05, STEELD)                 # antenna
     s += ball(rx,3.66,0.0, 0.10,[1.0,0.3,0.2], surf="constant")  # antenna tip
     s += box(rx-0.95,1.3,0.0, 0.19,0.6,0.21, STEELD)             # left arm hanging
@@ -93,27 +94,30 @@ def frame(f):
                'Polygon "P" [-40 0 14  40 0 14  40 26 14  -40 26 14]\nAttributeEnd')
     rib.append(rob)
 
-    # muzzle charge/idle glow
-    glow = 0.10 + 0.32*charge
-    if firing: glow = 0.30 + 0.10*math.sin(f*1.7)
-    rib.append(ball(mx,my,mzz, glow, [1.0,0.85,0.35], surf="constant"))
+    # muzzle charge/idle glow (while firing the flash ball below replaces it -
+    # they share a centre, so drawing both only buries the smaller one)
+    if not firing:
+        rib.append(ball(mx,my,mzz, 0.10 + 0.32*charge, [1.0,0.85,0.35], surf="constant"))
 
     if firing:
         tip = mx + (TARGET_X-mx)*firet
         thick = 0.16 + 0.05*math.sin(f*2.2)
         cx=(mx+tip)/2.0; hx=(tip-mx)/2.0
-        rib.append(box(cx,my,mzz, hx, thick*2.4, thick*2.4, [0.75,0.10,0.08], surf="constant"))  # soft outer
-        rib.append(box(cx,my,mzz, hx, thick*1.5, thick*1.5, [0.98,0.16,0.12], surf="constant"))  # red
-        rib.append(box(cx,my,mzz, hx, thick*0.6, thick*0.6, [1.0,0.96,0.88], surf="constant"))   # core
+        z_out = mzz                                      # -z is toward the camera, so
+        z_mid = z_out - (thick*2.4 + thick*1.5)          # each layer sits in front of
+        z_core= z_mid - (thick*1.5 + thick*0.6)          # the wider one behind it
+        rib.append(box(cx,my,z_out,  hx, thick*2.4, thick*2.4, [0.75,0.10,0.08], surf="constant"))  # soft outer
+        rib.append(box(cx,my,z_mid,  hx, thick*1.5, thick*1.5, [0.98,0.16,0.12], surf="constant"))  # red
+        rib.append(box(cx,my,z_core, hx, thick*0.6, thick*0.6, [1.0,0.96,0.88], surf="constant"))   # core
         rib.append(ball(mx,my,mzz, 0.32+0.07*math.sin(f*3.0), [1.0,0.6,0.2], surf="constant"))   # flash
         for k in range(2):
             bx = mx + (tip-mx)*(((f*0.17)+k*0.5) % 1.0)
-            rib.append(ball(bx,my,mzz, 0.13, [1.0,1.0,0.92], surf="constant"))                    # pulses
+            rib.append(ball(bx,my,z_core-(thick*0.6+0.13), 0.13, [1.0,1.0,0.92], surf="constant"))  # pulses
 
     tgt_cx = TARGET_X+0.6
     if impact <= 0.0:
         rib.append(box(tgt_cx,1.55,0.0, 0.45,0.95,0.5, [0.78,0.22,0.18]))
-        rib.append(box(tgt_cx,1.55,0.52, 0.3,0.6,0.03, [0.9,0.3,0.25]))
+        rib.append(box(tgt_cx,1.55,-0.52, 0.3,0.6,0.03, [0.9,0.3,0.25]))
     else:
         n = 16
         for k in range(n):

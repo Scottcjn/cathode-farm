@@ -6,6 +6,14 @@ It reads a subset of RIB (Format, Projection, LightSource, Surface, Color, Spher
 Polygon, transforms), ray-traces the scene with matte/plastic shading and ray-traced
 shadows, and draws to a Mac window as it renders.
 
+Within that subset it follows the RI spec: `#` comments are comments, `Polygon` takes
+any vertex count (triangles included) and finds `"P"` wherever it sits among the
+parameters, a named `Surface` starts from that shader's defaults, and
+`AttributeBegin`/`AttributeEnd` save and restore the **whole** graphics state while
+`TransformBegin`/`TransformEnd` save only the transform. One deliberate departure:
+a `constant` (emissive) surface stands in for a light, so it is skipped when tracing
+shadow rays - otherwise the glowing laser painted a hard black stripe across the floor.
+
 This is how the RenderMan Time Machine renders *on the emulated 1994 Mac itself* without
 Pixar's serial-locked MacRenderMan and without cracking anything: we wrote the renderer.
 
@@ -57,6 +65,16 @@ cc -DHOST_PREVIEW -O2 -o tinyrib_host tinyrib.c -lm
 ./tinyrib_host frame00.rib frame00.ppm
 ```
 
+### Tests
+
+The same host build is what the test suite drives - it renders small RIB scenes and
+asserts the pixels that come back, so every case is an end-to-end check of the code
+the Macs run:
+
+```sh
+python3 tinyrib/tests/test_tinyrib.py     # stdlib only, no network
+```
+
 Because it is the same source, the preview is pixel-faithful to what the Macs produce.
 
 ## Toy Story-quality pass (2026-07-17)
@@ -67,6 +85,11 @@ An upgraded render, cooked overnight on **six** emulated Macs. The renderer gain
 - **Bounding-sphere culling + precomputed quad normals/edges** and **key-light-only shadows**,
   so the heavier scene stays tractable on a 68040.
 - A `constant`/emissive surface for the glowing laser.
+
+A note on orientation, since it decides whether detail is visible at all: the camera
+looks down **+z**, so **-z is toward the viewer**. Anything meant to sit on the front
+of a body - a visor, eyes, a chest plate - belongs at negative z relative to that body,
+or it renders inside it.
 
 `gen_robot_laser.py [frames] [w] [h] [samples]` emits the animation with a cinematic camera
 push-in, eased motion with cannon recoil, a detailed robot, a layered beam, and a shockwave

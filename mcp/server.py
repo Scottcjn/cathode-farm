@@ -6,7 +6,17 @@ github.com/Scottcjn/cathode-farm). This exposes screenshot + reliable input
 (click / double-click / key / Command-key / type / menu-pick) over MCP.
 """
 import socket, subprocess, tempfile, os, base64, time
-from mcp.server.fastmcp import FastMCP, Image
+try:  # mcp >= 2.0.0 removed mcp.server.fastmcp; FastMCP was renamed
+    # MCPServer and moved to mcp.server.mcpserver. Same .tool()/.run() API.
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP
+try:  # Image's home under mcp 2.x is unverified here; try the new
+    # module first and fall back, so FastMCP resolving is never
+    # coupled to Image resolving.
+    from mcp.server.mcpserver import Image
+except ImportError:
+    from mcp.server.fastmcp import Image
 
 mcp = FastMCP("mac-farm")
 
